@@ -1,0 +1,163 @@
+---
+title: "Week 3 assignment"
+author: "K. Chang"
+date: "2023-12-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Project Step 1: Start an Rmd Document
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+
+## Project Step 2.1:  Read the source data  
+```{r nypd}
+nypd_shooting <-read.csv("https://data.cityofnewyork.us/api/views/833y-fsy8/rows.csv?accessType=DOWNLOAD")
+library(tidyverse)
+```
+
+## Project Step 2.2: Remove unnecessary columns (*coordinates related columns and location descriptions*)  
+```{r}
+nypd_shooting_trimmed <- nypd_shooting %>%
+  select(-c(LOC_OF_OCCUR_DESC,JURISDICTION_CODE:LOCATION_DESC, X_COORD_CD:Lon_Lat))
+
+```
+
+## Project Step 2.3: Tidy and trasnform the data set 
+```{r}
+## review the format of each column
+column_format <- sapply(nypd_shooting_trimmed, class)
+column_format
+
+## changing variables to the correct data types 
+library(lubridate)
+
+
+nypd_shooting_formatted <- nypd_shooting_trimmed %>%
+  mutate(INCIDENT_KEY = as.character(INCIDENT_KEY)) %>%
+  mutate(OCCUR_DATE = mdy(OCCUR_DATE)) %>%
+  mutate(OCCUR_TIME = hms(OCCUR_TIME))
+
+## Review missing data 
+missing_data <- lapply(nypd_shooting_formatted, function(x) sum(x == ""))
+missing_data
+```
+ It appears when it comes to the perpetrator's information, there are 9000+ records that do not contain any value. I'll replace the missing data with "(null)"
+```{r}
+default_value <- "(null)"
+nypd_shooting_formatted[nypd_shooting_formatted == ""] <- default_value
+
+### Recheck for missing values
+
+missing_data <- lapply(nypd_shooting_formatted, function(x) sum(x == ""))
+missing_data
+
+```
+After confirming there is no missing values in my data, I'll convert the following variables into factors:  
+BORO  
+PRECINCT  
+STATISTICAL_MURDER_FLAG  
+PERP_AGE_GROUP  
+PERP_SEX  
+PERP_RACE  
+VIC_AGE_GROUP  
+VIC_SEX  
+VIC_RACE  
+```{r}
+columns_factor <- c("BORO", "PRECINCT","STATISTICAL_MURDER_FLAG","PERP_AGE_GROUP", "PERP_SEX", "PERP_RACE", "VIC_AGE_GROUP", "VIC_SEX", "VIC_RACE")
+
+nypd_shooting_formatted2 <- nypd_shooting_formatted %>%
+  mutate(across(all_of(columns_factor), as.factor))
+
+## review data frame structure prior to plotting
+str(nypd_shooting_formatted2)
+summary(nypd_shooting_formatted2)
+
+## cleanup factors
+
+nypd_shooting_formatted2$PERP_SEX[nypd_shooting_formatted2$PERP_SEX == "(null)"] <- "U"
+nypd_shooting_formatted2$PERP_AGE_GROUP[nypd_shooting_formatted2$PERP_AGE_GROUP == "(null)"] <- "UNKNOWN"
+nypd_shooting_formatted2$PERP_RACE[nypd_shooting_formatted2$PERP_RACE == "(null)"] <- "UNKNOWN"
+summary(nypd_shooting_formatted2)
+```
+Add a column to combine victim sex and race and a column for the year that incidents occurred
+
+```{r}
+nypd_shooting_formatted2 <- nypd_shooting_formatted2 %>%
+  mutate(VIC_SEX_RACE = str_c(VIC_SEX," - ", VIC_RACE)) %>%
+  mutate(OCCUR_YEAR = year(OCCUR_DATE))
+```
+## Project Step 3: Add Visualizations and Analysis
+
+### 1. Summarize the data by date, boro, statistical murder flag and victim_sex_race and create a summary data frame
+```{r}
+df_summary <- nypd_shooting_formatted2 %>%
+  group_by(OCCUR_YEAR, BORO, STATISTICAL_MURDER_FLAG, VIC_SEX_RACE) %>%
+  count() %>%
+  rename(Incidence = n)%>%
+  mutate(murder_count = ifelse(STATISTICAL_MURDER_FLAG =="true", Incidence, 0))%>%
+  ungroup()
+```
+
+### 2. Visualize the summary dataframe
+```{r}
+df_summary %>%
+  ggplot(aes(x=OCCUR_YEAR)) +
+  geom_col(aes(y = Incidence, fill = BORO)) + 
+  labs(title = "Total Incident by Year", y=NULL)
+```
+
+### 3. Visualize the breakdown of the whole data set by looking at gender/race of the victims by boros
+```{r}
+nypd_shooting_formatted2 <- nypd_shooting_formatted2 %>%
+  mutate(VIC_SEX_RACE = str_c(VIC_SEX," - ", VIC_RACE))
+
+ggplot(nypd_shooting_formatted2, aes(x=BORO, y=VIC_SEX_RACE))+
+  geom_count()
+
+```
+```{r}
+
+table(nypd_shooting_formatted2$VIC_SEX_RACE, nypd_shooting_formatted2$BORO)
+```
+### 4. Create a model 
+I'm gonna use incidence as a way to predict murder count
+
+```{r}
+mod <- glm(murder_count ~ Incidence, data = df_summary )
+summary(mod)
+
+df_summary_with_pred <- df_summary %>%
+  mutate(pred = predict(mod))
+
+
+```
+### 5 Plot the data set with predictions for Brooklyn
+```{r}
+df_summary_with_pred %>%
+  filter(Incidence >0)%>%
+  filter(BORO == "BROOKLYN")%>%
+  ggplot(aes(x = Incidence, y = murder_count)) + 
+  geom_point(aes(x = Incidence, y = murder_count), color = "blue") +
+  geom_line(aes(x = Incidence, y = pred), color = "red")
+
+
+```
+
+
+## Project Step 4: Add Bias Identification
+
+When I was living in NYC, I was under the impression that Brox will have shooting than any other boroughs. Based on the data it's not the case. Brooklyn to my suprise has the most number of incidents.
+
+Prior to plotting out the victim characteristics (sex and race) by borough, I was expecting the victim characteristics distribution would be similar across the boroughs. What surprised me is that in Brooklyn, there are more black female victims than male white Hispanic victims. The other boroughs have similar ranking in terms of victim characteristics - M-Black >> M-White Hispanic >>F-Black.
+
+In addition, I was expecting female to represent a bigger percentage of the victim pools than pools. However, the data is showing the opposite. 
+
+I think having bias or preconceived notion is human nature. I will use data to validate or reject my original assumptions to make more informed analysis and decisions going forward. 
+
